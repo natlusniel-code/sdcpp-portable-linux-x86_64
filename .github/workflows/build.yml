@@ -1,0 +1,49 @@
+name: build-portable
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  build:
+    # ubuntu-22.04 => glibc 2.35, runs on Debian 12 (2.36) and newer
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Clone stable-diffusion.cpp
+        run: |
+          git clone --depth 1 https://github.com/leejet/stable-diffusion.cpp.git src
+          cd src && git submodule update --init --recursive
+
+      - name: Build
+        run: |
+          cd src
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DSD_WEBP=OFF -DSD_SERVER=OFF
+          cmake --build build --target sd-cli -j $(nproc)
+
+      - name: Package
+        run: |
+          mkdir -p dist
+          cp src/build/bin/sd-cli dist/ 2>/dev/null || cp src/build/bin/* dist/
+          cp src/build/bin/*.so* dist/ 2>/dev/null || true
+          cat > dist/sd <<'EOF'
+          #!/bin/bash
+          DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+          export LD_LIBRARY_PATH="$DIR${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+          exec "$DIR/sd-cli" "$@"
+          EOF
+          chmod +x dist/sd
+          tar czf sdcpp-linux-x86_64.tar.gz -C dist .
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sdcpp-linux-x86_64
+          path: sdcpp-linux-x86_64.tar.gz
+
+      - name: Attach to release
+        if: startswith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: sdcpp-linux-x86_64.tar.gz
